@@ -1,0 +1,35 @@
+{
+  description = "sample-clojure-make-git";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    treefmt-nix.url = "github:numtide/treefmt-nix";
+  };
+
+  outputs =
+    inputs:
+    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      systems = [ "x86_64-linux" ];
+
+      imports = [
+        inputs.treefmt-nix.flakeModule
+      ];
+
+      perSystem =
+        { pkgs, config, ... }:
+        {
+          packages.default = pkgs.hello;
+
+          devShells.default = pkgs.mkShell {
+            packages = with pkgs; [
+              clojure
+            ];
+          };
+
+          treefmt = {
+            programs.nixfmt.enable = true;
+          };
+        };
+    };
+}
