@@ -17,6 +17,10 @@ export REPL_MIDDLEWARE
 repl:
 	clj -Sdeps "$${REPL_DEPS}" -M -m nrepl.cmdline --interactive --middleware "[$${REPL_MIDDLEWARE}]"
 
+.PHONY: update
+update:
+	clojure -Sdeps '{:deps {com.github.liquidz/antq {:mvn/version "RELEASE"}}}' -M -m antq.core --upgrade --force
+
 .PHONY: uber
 uber: clean
 	clj -T:build uber
