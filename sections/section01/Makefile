@@ -3,8 +3,8 @@ all:
 
 define REPL_DEPS
 {:deps
-  {nrepl/nrepl {:mvn/version "1.3.1"}
-   cider/cider-nrepl {:mvn/version "0.55.7"}}}
+  {nrepl/nrepl {:mvn/version "RELEASE"}
+   cider/cider-nrepl {:mvn/version "RELEASE"}}}
 endef
 export REPL_DEPS
 
