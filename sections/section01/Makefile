@@ -23,7 +23,7 @@ update:
 
 .PHONY: uber
 uber: clean
-	clj -T:build uber
+	clojure -T:build uber
 
 .PHONY: clean
 clean:
