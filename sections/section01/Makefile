@@ -15,7 +15,7 @@ export REPL_MIDDLEWARE
 
 .PHONY: repl
 repl:
-	clj -Sdeps "$${REPL_DEPS}" -M -m nrepl.cmdline --interactive --middleware "[$${REPL_MIDDLEWARE}]"
+	clj -A:dev -Sdeps "$${REPL_DEPS}" -M -m nrepl.cmdline --interactive --middleware "[$${REPL_MIDDLEWARE}]"
 
 .PHONY: update
 update:
