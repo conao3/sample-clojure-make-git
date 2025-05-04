@@ -23,7 +23,9 @@
 
           devShells.default = pkgs.mkShell {
             packages = with pkgs; [
-              clojure
+              graalvm-ce
+              (clojure.override { jdk = graalvm-ce; })
+              clojure-lsp
             ];
           };
 
