@@ -3,6 +3,9 @@
    [clojure.string :as str]
    [clj-commons.digest :as digest]
    [babashka.fs :as fs])
+  (:import
+   [java.util.zip Deflater Inflater]
+   [java.io ByteArrayOutputStream OutputStreamWriter])
   (:gen-class))
 
 (declare actions)
@@ -10,6 +13,33 @@
 (def git-dir (fs/file ".git"))
 (def objects-dir (fs/file git-dir "objects"))
 (def refs-dir (fs/file git-dir "refs"))
+
+(defn zlib-compress ^bytes [^bytes data]
+  (let [deflater (doto (Deflater.)
+                   (.setInput data)
+                   (.finish))
+        buffer (byte-array 1024)]
+    (with-open [byte-stream (ByteArrayOutputStream.)]
+      (loop []
+        (let [size (. deflater deflate buffer)]
+          (when (pos? size)
+            (. byte-stream write buffer 0 size)
+            (recur))))
+      (. deflater end)
+      (. byte-stream toByteArray))))
+
+(defn zlib-decompress ^bytes [^bytes data]
+  (let [inflater (doto (Inflater.)
+                   (.setInput data))
+        buffer (byte-array 1024)]
+    (with-open [byte-stream (ByteArrayOutputStream.)]
+      (loop []
+        (let [size (. inflater inflate buffer)]
+          (when (pos? size)
+            (. byte-stream write buffer 0 size)
+            (recur))))
+      (. inflater end)
+      (. byte-stream toByteArray))))
 
 (defn parse [handler args]
   (reduce
@@ -48,13 +78,21 @@
       (throw (ex-info error {:args args})))
 
     (doseq [filepath (:args options)]
-      (let [^bytes content (fs/read-all-bytes filepath)]
-        (with-open [byte-out (java.io.ByteArrayOutputStream.)
-                    writer (java.io.OutputStreamWriter. byte-out "UTF-8")]
-          (.write writer (format "blob %s\0" (count content)))
-          (.flush writer)
-          (.write byte-out content)
-          (println (digest/sha1 (.toByteArray byte-out))))))))
+      (let [^bytes content (fs/read-all-bytes filepath)
+            ^bytes blob (with-open [byte-stream (ByteArrayOutputStream.)
+                                    writer (OutputStreamWriter. byte-stream "UTF-8")]
+                          (. writer write (format "blob %s\0" (count content)))
+                          (. writer flush)
+                          (. byte-stream write content)
+                          (. byte-stream toByteArray))
+            hash (digest/sha1 blob)]
+        (println hash)
+        (when (:w options)
+          (let [dir-name (subs hash 0 2)
+                file-name (subs hash 2)
+                file-path (fs/file objects-dir dir-name file-name)]
+            (fs/create-dirs (fs/parent file-path))
+            (fs/write-bytes file-path (zlib-compress blob))))))))
 
 (defn cmd-init
   "Initialize git repository"
