@@ -31,6 +31,7 @@
 
           treefmt = {
             programs.nixfmt.enable = true;
+            programs.cljfmt.enable = true;
           };
         };
     };
