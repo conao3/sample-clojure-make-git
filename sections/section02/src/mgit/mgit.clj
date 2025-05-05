@@ -1,5 +1,7 @@
 (ns mgit.mgit
-  (:require [babashka.fs :as fs])
+  (:require
+   [clojure.string :as str]
+   [babashka.fs :as fs])
   (:gen-class))
 
 (declare actions)
@@ -7,6 +9,30 @@
 (def git-dir (fs/file ".git"))
 (def objects-dir (fs/file git-dir "objects"))
 (def refs-dir (fs/file git-dir "refs"))
+
+(defn cmd-hash-object
+  "Compute object ID"
+  [& args]
+  (let [parsed (reduce (fn [acc _]
+                         (if (nil? (:remaining acc))
+                           (reduced acc)
+                           (let [arg (-> acc :remaining first)
+                                 more (-> acc :remaining rest)]
+                             (condp apply [arg]
+                               #{"-w"} (-> acc
+                                           (assoc-in [:options :w] true)
+                                           (update :remaining next))
+                               #{"--"} (reduced (-> acc
+                                                    (update-in [:options :args] into more)
+                                                    (assoc :remaining nil)))
+                               #(-> (or % "") (str/starts-with? "-"))
+                               (reduced {:error (str "Illegal argument: " arg)})
+                               (-> acc
+                                   (update-in [:options :args] conj arg)
+                                   (update :remaining next))))))
+                       {:options {:args []} :remaining args}
+                       args)]
+    parsed))
 
 (defn cmd-init
   "Initialize git repository"
