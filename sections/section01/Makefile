@@ -1,5 +1,5 @@
 .PHONY: all
-all:
+all: native
 
 define REPL_DEPS
 {:deps
@@ -22,8 +22,20 @@ update:
 	clojure -Sdeps '{:deps {com.github.liquidz/antq {:mvn/version "RELEASE"}}}' -M -m antq.core --upgrade --force
 
 .PHONY: uber
-uber: clean
+uber: target/mgit-standalone.jar
+
+target/mgit-standalone.jar:
 	clojure -T:build uber
+
+.PHONY: native
+native: target/mgit
+
+target/mgit: target/mgit-standalone.jar
+	native-image -jar $< \
+	--features=clj_easy.graal_build_time.InitClojureClasses \
+	--verbose \
+	--no-fallback \
+	$@
 
 .PHONY: clean
 clean:

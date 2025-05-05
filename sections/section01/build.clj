@@ -3,9 +3,8 @@
 
 (def lib 'mgit/mgit)
 (def main 'mgit.mgit)
-(def version (format "0.1.%s" (b/git-count-revs nil)))
 (def class-dir "target/classes")
-(def uber-file (format "target/%s-%s-standalone.jar" (name lib) version))
+(def uber-file (format "target/%s-standalone.jar" (name lib)))
 (def basis (delay (b/create-basis {:project "deps.edn"})))
 
 (defn uber [_]
