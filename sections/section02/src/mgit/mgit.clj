@@ -1,12 +1,25 @@
 (ns mgit.mgit
+  (:require [babashka.fs :as fs])
   (:gen-class))
 
 (declare actions)
 
+(def git-dir (fs/file ".git"))
+(def objects-dir (fs/file git-dir "objects"))
+(def refs-dir (fs/file git-dir "refs"))
+
 (defn cmd-init
   "Initialize git repository"
-  [& args]
-  (println args))
+  [& _args]
+  (doseq [dir [git-dir objects-dir refs-dir]]
+    (fs/create-dirs dir))
+
+  (doseq [[path contents] {"config" "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n"
+                           "HEAD" "ref: refs/heads/master\n"}]
+    (->> contents
+         (spit (fs/file git-dir path))))
+
+  (println (format "Initialized empty Git repository in %s" (fs/absolutize git-dir))))
 
 (defn cmd-help
   "Help"
