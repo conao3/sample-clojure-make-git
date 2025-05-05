@@ -1,6 +1,7 @@
 (ns mgit.mgit
   (:require
    [clojure.string :as str]
+   [clj-commons.digest :as digest]
    [babashka.fs :as fs])
   (:gen-class))
 
@@ -34,15 +35,26 @@
 (defn cmd-hash-object
   "Compute object ID"
   [& args]
-  (let [parsed (->> args
-                    (parse
-                     (fn [acc]
-                       (condp apply [(-> acc :remaining first)]
-                         #{"-w"} (-> acc
-                                     (assoc-in [:options :w] true)
-                                     (update :remaining next))
-                         nil))))]
-    parsed))
+  (let [{:keys [options error]}
+        (->> (rest args)
+             (parse
+              (fn [acc]
+                (condp apply [(-> acc :remaining first)]
+                  #{"-w"} (-> acc
+                              (assoc-in [:options :w] true)
+                              (update :remaining next))
+                  nil))))]
+    (when error
+      (throw (ex-info error {:args args})))
+
+    (doseq [filepath (:args options)]
+      (let [^bytes content (fs/read-all-bytes filepath)]
+        (with-open [byte-out (java.io.ByteArrayOutputStream.)
+                    writer (java.io.OutputStreamWriter. byte-out "UTF-8")]
+          (.write writer (format "blob %s\0" (count content)))
+          (.flush writer)
+          (.write byte-out content)
+          (println (digest/sha1 (.toByteArray byte-out))))))))
 
 (defn cmd-init
   "Initialize git repository"
@@ -65,6 +77,7 @@
     (println (format "  %s - %s" k (:doc (meta v))))))
 
 (def actions {"init" #'cmd-init
+              "hash-object" #'cmd-hash-object
               "help" #'cmd-help})
 
 (defn -main [& args]
