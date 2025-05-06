@@ -94,6 +94,39 @@
             (fs/create-dirs (fs/parent file-path))
             (fs/write-bytes file-path (zlib-compress blob))))))))
 
+(defn cmd-cat-file
+  "Output the contents of git object"
+  [& args]
+  (let [{:keys [options error]}
+        (->> (rest args)
+             (parse
+              (fn [acc]
+                (condp apply [(-> acc :remaining first)]
+                  #{"-p"} (-> acc
+                              (assoc-in [:options :p] true)
+                              (update :remaining next))
+                  nil))))]
+    (when error
+      (throw (ex-info error {:args args})))
+
+    (when (not= 1 (count (:args options)))
+      (throw (ex-info "fatal: Specify exactly 1 argument" {:args args})))
+
+    (let [hash (first (:args options))
+          dir-name (subs hash 0 2)
+          file-name (subs hash 2)
+          ^bytes content (-> (fs/file objects-dir dir-name file-name)
+                             fs/read-all-bytes)
+          blob (zlib-decompress content)
+          sepinx (->> blob
+                      (keep-indexed
+                       (fn [inx elm] (when (= elm 0) inx)))
+                      first)
+          out (. System out)]
+      (if (:p options)
+        (. out write blob (inc sepinx) (- (alength blob) (inc sepinx)))
+        (throw (ex-info "fatal: Required `-p' option" {:args args}))))))
+
 (defn cmd-init
   "Initialize git repository"
   [& _args]
@@ -116,6 +149,7 @@
 
 (def actions {"init" #'cmd-init
               "hash-object" #'cmd-hash-object
+              "cat-file" #'cmd-cat-file
               "help" #'cmd-help})
 
 (defn -main [& args]
