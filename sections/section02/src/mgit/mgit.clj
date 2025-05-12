@@ -42,6 +42,60 @@
       (. inflater end)
       (. byte-stream toByteArray))))
 
+(defn bytes->int [data]
+  (reduce (fn [acc elm] (+ (bit-shift-left acc 8) (bit-and elm 0xff))) 0 data))
+
+(defn bytes->str [data]
+  (-> data byte-array String.))
+
+(defn bytes->hexstr [data]
+  (->> data ((partial map (partial format "%02x"))) (apply str)))
+
+(defn bytes-parse [acc key parse-fn remaining-update-fn]
+  (-> acc
+      (assoc-in [:parsed key] (parse-fn acc))
+      (update :remaining remaining-update-fn)))
+
+(defn parse-bytes [acc key size & [update-value-fn]]
+  (-> acc
+      (bytes-parse key #(take size (:remaining %)) (partial drop size))
+      (update-in [:parsed key] (or update-value-fn identity))))
+
+(defn parse-int [acc key size]
+  (-> acc
+      (parse-bytes key size bytes->int)))
+
+(defn parse-uint16 [acc key]
+  (parse-int acc key 2))
+
+(defn parse-uint32 [acc key]
+  (parse-int acc key 4))
+
+(defn parse-const [acc key ^String const]
+  (bytes-parse acc
+               key
+               #(do
+                  (when-not (= (take 4 (:remaining %))
+                               (seq (. const getBytes)))
+                    (throw (ex-info "Data should be start specifyed constant" {:acc % :const const})))
+                  true)
+               (partial drop 4)))
+
+(defn read-until-null [acc]
+  (loop [bytes []
+         find-null false
+         remaining (:remaining acc)]
+    (let [d (first remaining)]
+      (cond
+        (= d 0)
+        (recur bytes true (rest remaining))
+
+        (and (not= d 0) (not find-null))
+        (recur (conj bytes d) false (rest remaining))
+
+        (and (not= d 0) find-null)
+        {:bytes bytes :remaining remaining}))))
+
 (defn parse [handler args]
   (reduce
    (fn [acc _]
@@ -129,45 +183,8 @@
         (throw (ex-info "fatal: Required `-p' option" {:args args}))))))
 
 (defn parse-index [^bytes data]
-  (let [bytes->int #(reduce (fn [acc elm] (+ (bit-shift-left acc 8) (bit-and elm 0xff))) 0 %)
-        bytes->str #(-> % byte-array String.)
-        bytes->hexstr #(->> % ((partial map (partial format "%02x"))) (apply str))
-        parse (fn [acc key parse-fn remaining-update-fn]
-                (-> acc
-                    (assoc-in [:parsed key] (parse-fn acc))
-                    (update :remaining remaining-update-fn)))
-        parse-bytes (fn [acc key size & [update-value-fn]]
-                      (-> acc
-                          (parse key #(take size (:remaining %)) (partial drop size))
-                          (update-in [:parsed key] (or update-value-fn identity))))
-        parse-int (fn [acc key size]
-                    (-> acc
-                        (parse-bytes key size bytes->int)))
-        parse-uint16 (fn [acc key] (parse-int acc key 2))
-        parse-uint32 (fn [acc key] (parse-int acc key 4))
-        parse-dirc (fn [acc key]
-                     (parse acc
-                            key
-                            #(do
-                               (when-not (= (take 4 (:remaining %))
-                                            (seq (. "DIRC" getBytes)))
-                                 (throw (ex-info "Data should be start with `DIRC'" {:acc %})))
-                               true)
-                            (partial drop 4)))
-        parse-filepath (fn [acc key]
-                         (let [res (loop [bytes []
-                                          find-null false
-                                          remaining (:remaining acc)]
-                                     (let [d (first remaining)]
-                                       (cond
-                                         (= d 0)
-                                         (recur bytes true (rest remaining))
-
-                                         (and (not= d 0) (not find-null))
-                                         (recur (conj bytes d) false (rest remaining))
-
-                                         (and (not= d 0) find-null)
-                                         {:bytes bytes :remaining remaining})))]
+  (let [parse-filepath (fn [acc key]
+                         (let [res (read-until-null acc)]
                            (-> acc
                                (assoc-in [:parsed key] (bytes->str (:bytes res)))
                                (assoc :remaining (:remaining res)))))
@@ -194,7 +211,7 @@
                         (nth (iterate #(parse-entry % key) acc)
                              (-> acc :parsed :number-of-entries)))]
     (-> {:parsed {} :remaining (seq data)}
-        (parse-dirc :dirc)
+        (parse-const :dirc "DIRC")
         (parse-uint32 :version)
         (parse-uint32 :number-of-entries)
         (parse-entries :entries)
