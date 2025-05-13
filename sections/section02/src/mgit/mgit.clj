@@ -96,6 +96,41 @@
         (and (not= d 0) find-null)
         {:bytes bytes :remaining remaining}))))
 
+(defn parse-index [^bytes data]
+  (let [parse-filepath (fn [acc key]
+                         (let [res (read-until-null acc)]
+                           (-> acc
+                               (assoc-in [:parsed key] (bytes->str (:bytes res)))
+                               (assoc :remaining (:remaining res)))))
+        parse-entry (fn [acc key]
+                      (let [res (-> (assoc acc :parsed {})
+                                    (parse-uint32 :ctime-sec)
+                                    (parse-uint32 :ctime-nsec)
+                                    (parse-uint32 :mtime-sec)
+                                    (parse-uint32 :mtime-nsec)
+                                    (parse-uint32 :dev)
+                                    (parse-uint32 :ino)
+                                    (parse-uint32 :mode)
+                                    (parse-uint32 :uid)
+                                    (parse-uint32 :gid)
+                                    (parse-uint32 :size)
+                                    (parse-bytes :object-id 20 bytes->hexstr)
+                                    (parse-uint16 :flag)
+                                    (parse-filepath :filepath))]
+                        (-> acc
+                            (update-in [:parsed key] #(or % []))
+                            (update-in [:parsed key] conj (:parsed res))
+                            (assoc :remaining (:remaining res)))))
+        parse-entries (fn [acc key]
+                        (nth (iterate #(parse-entry % key) acc)
+                             (-> acc :parsed :number-of-entries)))]
+    (-> {:parsed {} :remaining (seq data)}
+        (parse-const :dirc "DIRC")
+        (parse-uint32 :version)
+        (parse-uint32 :number-of-entries)
+        (parse-entries :entries)
+        (parse-bytes :checksum 20 bytes->hexstr))))
+
 (defn parse [handler args]
   (reduce
    (fn [acc _]
@@ -181,41 +216,6 @@
       (if (:p options)
         (. out write blob (inc sepinx) (- (alength blob) (inc sepinx)))
         (throw (ex-info "fatal: Required `-p' option" {:args args}))))))
-
-(defn parse-index [^bytes data]
-  (let [parse-filepath (fn [acc key]
-                         (let [res (read-until-null acc)]
-                           (-> acc
-                               (assoc-in [:parsed key] (bytes->str (:bytes res)))
-                               (assoc :remaining (:remaining res)))))
-        parse-entry (fn [acc key]
-                      (let [res (-> (assoc acc :parsed {})
-                                    (parse-uint32 :ctime-sec)
-                                    (parse-uint32 :ctime-nsec)
-                                    (parse-uint32 :mtime-sec)
-                                    (parse-uint32 :mtime-nsec)
-                                    (parse-uint32 :dev)
-                                    (parse-uint32 :ino)
-                                    (parse-uint32 :mode)
-                                    (parse-uint32 :uid)
-                                    (parse-uint32 :gid)
-                                    (parse-uint32 :size)
-                                    (parse-bytes :object-id 20 bytes->hexstr)
-                                    (parse-uint16 :flag)
-                                    (parse-filepath :filepath))]
-                        (-> acc
-                            (update-in [:parsed key] #(or % []))
-                            (update-in [:parsed key] conj (:parsed res))
-                            (assoc :remaining (:remaining res)))))
-        parse-entries (fn [acc key]
-                        (nth (iterate #(parse-entry % key) acc)
-                             (-> acc :parsed :number-of-entries)))]
-    (-> {:parsed {} :remaining (seq data)}
-        (parse-const :dirc "DIRC")
-        (parse-uint32 :version)
-        (parse-uint32 :number-of-entries)
-        (parse-entries :entries)
-        (parse-bytes :checksum 20 bytes->hexstr))))
 
 (defn cmd-parse-index
   "Parse .git/index"
