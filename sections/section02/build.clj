@@ -1,6 +1,8 @@
 (ns build
   (:require [clojure.tools.build.api :as b]))
 
+(alter-var-root #'*warn-on-reflection* (constantly true))
+
 (def lib 'mgit/mgit)
 (def main 'mgit.mgit)
 (def class-dir "target/classes")
