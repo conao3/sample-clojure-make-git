@@ -1,6 +1,8 @@
 .PHONY: all
 all: native
 
+UNAME_OS := $(shell uname -s)
+
 define REPL_DEPS
 {:deps
   {nrepl/nrepl {:mvn/version "RELEASE"}
@@ -28,13 +30,18 @@ target/mgit-standalone.jar:
 	clojure -T:build uber
 
 .PHONY: native
-native: target/mgit
+native: target/
+
+ifeq ($(UNAME_OS),Darwin)
+GRAAL_BUILD_ARGS += -H:-CheckToolchain
+endif
 
 target/mgit: target/mgit-standalone.jar
 	native-image -jar $< \
 	--features=clj_easy.graal_build_time.InitClojureClasses \
 	--verbose \
 	--no-fallback \
+	$(GRAAL_BUILD_ARGS) \
 	$@
 
 .PHONY: clean
