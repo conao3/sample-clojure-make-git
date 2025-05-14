@@ -200,19 +200,22 @@
         (assoc :atime (-> attrs :last-access-time FileTime/.toInstant)))))
 
 (defn get-file-entry [attrs]
-  (merge
-   (select-keys attrs [:dev :ino :mode :uid :gid :size :filepath])
-   {:ctime-sec (-> attrs :ctime Instant/.getEpochSecond)
-    :ctime-nsec (-> attrs :ctime Instant/.getNano)
-    :mtime-sec (-> attrs :mtime Instant/.getEpochSecond)
-    :mtime-nsec (-> attrs :mtime Instant/.getNano)
-    :object-id (-> attrs
-                   :filepath
-                   fs/read-all-bytes
-                   blob-blob
-                   digest/sha1)
-    ;; TODO: 実際にはassume-validなどを考慮する必要がある
-    :flag (-> attrs :filepath count (min 0xfff))}))
+  (let [blob (-> attrs :filepath fs/read-all-bytes blob-blob)
+        hash (-> blob digest/sha1)
+        dir-name (subs hash 0 2)
+        file-name (subs hash 2)
+        file-path (fs/file objects-dir dir-name file-name)]
+    (fs/create-dirs (fs/parent file-path))
+    (fs/write-bytes file-path (zlib-compress blob))
+    (merge
+     (select-keys attrs [:dev :ino :mode :uid :gid :size :filepath])
+     {:ctime-sec (-> attrs :ctime Instant/.getEpochSecond)
+      :ctime-nsec (-> attrs :ctime Instant/.getNano)
+      :mtime-sec (-> attrs :mtime Instant/.getEpochSecond)
+      :mtime-nsec (-> attrs :mtime Instant/.getNano)
+      :object-id hash
+      ;; TODO: 実際にはassume-validなどを考慮する必要がある
+      :flag (-> attrs :filepath count (min 0xfff))})))
 
 (defn parse-index [^bytes data]
   (let [parse-filepath (fn [acc key]
@@ -313,8 +316,7 @@
       (throw (ex-info error {:args args})))
 
     (doseq [filepath (:args options)]
-      (let [content (fs/read-all-bytes filepath)
-            blob (blob-blob content)
+      (let [blob (blob-blob (fs/read-all-bytes filepath))
             hash (digest/sha1 blob)]
         (println hash)
         (when (:w options)
