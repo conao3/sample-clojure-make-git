@@ -1,5 +1,7 @@
 (ns mgit.mgit
-  (:require [babashka.fs :as fs])
+  (:require
+   [babashka.fs :as fs]
+   [clojure.string :as str])
   (:gen-class))
 
 (declare actions)
@@ -11,6 +13,40 @@
 (defn eprintln [& args]
   (binding [*out* *err*]
     (apply println args)))
+
+(defn parse [handler args]
+  (reduce
+   (fn [acc _]
+     (let [arg (-> acc :remaining first)
+           more (-> acc :remaining rest)]
+       (or
+        (when (nil? (:remaining acc))
+          (reduced acc))
+        (handler acc)
+        (when (= arg "--")
+          (reduced (-> acc
+                       (update-in [:options :args] into more)
+                       (assoc :remaining nil))))
+        (when (-> (or arg "") (str/starts-with? "-"))
+          (reduced {:error (str "Illegal argument: " arg)}))
+        (-> acc
+            (update-in [:options :args] conj arg)
+            (update :remaining next)))))
+   {:options {:args []} :remaining args}
+   args))
+
+(defn cmd-add
+  "Add file contents to the index"
+  [& args]
+  (let [parsed (->> args
+                    (parse
+                     (fn [acc]
+                       (condp apply [(-> acc :remaining first)]
+                         #{"-N"} (-> acc
+                                     (assoc-in [:options :N] true)
+                                     (update :remaining next))
+                         nil))))]
+    (eprintln parsed)))
 
 (defn cmd-init
   "Initialize git repository"
@@ -29,9 +65,11 @@
   [& _args]
   (println "Available actions:")
   (doseq [[k v] actions]
-    (println (format "  %s - %s" k (:doc (meta v))))))
+    (-> (format "  %s - %s" k (:doc (meta v)))
+        eprintln)))
 
 (def actions {"init" #'cmd-init
+              "add" #'cmd-add
               "help" #'cmd-help})
 
 (defn -main [& args]
