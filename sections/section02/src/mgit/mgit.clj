@@ -2,6 +2,9 @@
   (:require
    [babashka.fs :as fs]
    [clojure.string :as str])
+  (:import
+   [java.io ByteArrayOutputStream]
+   [java.util.zip Deflater Inflater])
   (:gen-class))
 
 (declare actions)
@@ -9,6 +12,33 @@
 (def git-dir (fs/file ".git"))
 (def objects-dir (fs/file git-dir "objects"))
 (def refs-dir (fs/file git-dir "refs"))
+
+(defn zlib-compress ^bytes [^bytes data]
+  (let [deflater (doto (Deflater.)
+                   (.setInput data)
+                   (.finish))
+        buffer (byte-array 1024)]
+    (with-open [byte-stream (ByteArrayOutputStream.)]
+      (loop []
+        (let [size (. deflater deflate buffer)]
+          (when (pos? size)
+            (. byte-stream write buffer 0 size)
+            (recur))))
+      (. deflater end)
+      (. byte-stream toByteArray))))
+
+(defn zlib-decompress ^bytes [^bytes data]
+  (let [inflater (doto (Inflater.)
+                   (.setInput data))
+        buffer (byte-array 1024)]
+    (with-open [byte-stream (ByteArrayOutputStream.)]
+      (loop []
+        (let [size (. inflater inflate buffer)]
+          (when (pos? size)
+            (. byte-stream write buffer 0 size)
+            (recur))))
+      (. inflater end)
+      (. byte-stream toByteArray))))
 
 (defn eprintln [& args]
   (binding [*out* *err*]
