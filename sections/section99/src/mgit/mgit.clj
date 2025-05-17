@@ -200,7 +200,7 @@
                        (update-keys camel->kebab-keyword))
         attrs (merge posix-attrs unix-attrs)]
     (-> attrs
-        (assoc :filepath file)          ; TODO: .gitからの相対パスにする
+        (assoc :filepath file) ; TODO: .gitからの相対パスにする
         (assoc :ctime (-> attrs :creation-time FileTime/.toInstant))
         (assoc :mtime (-> attrs :last-modified-time FileTime/.toInstant))
         (assoc :atime (-> attrs :last-access-time FileTime/.toInstant)))))
