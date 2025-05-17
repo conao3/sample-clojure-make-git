@@ -14,6 +14,9 @@
   (binding [*out* *err*]
     (apply println args)))
 
+(defn int->octstr [elm]
+  (format "%o" elm))
+
 (defn bytes->int [data]
   (reduce (fn [acc elm] (+ (bit-shift-left acc 8) (bit-and elm 0xff))) 0 data))
 
@@ -147,17 +150,40 @@
                                      (assoc-in [:options :N] true)
                                      (update :remaining next))
                          nil))))]
-    (eprintln parsed)))
-
-(require 'clojure.pprint)
+    (println parsed)))
 
 (defn cmd-ls-files
-  "Parse .git/index"
-  [& _args]
-  (-> (fs/file git-dir "index")
-      fs/read-all-bytes
-      parse-index
-      clojure.pprint/pprint))
+  "Show information about files in the index and the working tree"
+  [& args]
+  (let [{:keys [options error]}
+        (->> (rest args)
+             (parse
+              (fn [acc]
+                (condp apply [(-> acc :remaining first)]
+                  #{"--stage"} (-> acc
+                                   (assoc-in [:options :stage] true)
+                                   (update :remaining next))
+                  nil))))]
+    (when error
+      (throw (ex-info error {:args args})))
+
+    (when-not (:stage options)
+      (throw (ex-info "fatal: --stage is required" {:args args})))
+
+    (doseq [entry (-> (fs/file git-dir "index")
+                      fs/read-all-bytes
+                      parse-index
+                      :parsed
+                      :entries)]
+      (->> entry
+           ((juxt (comp int->octstr :mode)
+                  (constantly " ")
+                  :object-id
+                  (constantly "0") ; TODO: stage number
+                  (constantly "\t")
+                  :filepath))
+           (apply str)
+           println))))
 
 (defn cmd-help
   "Help"
