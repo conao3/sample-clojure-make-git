@@ -52,6 +52,9 @@
 (defn int->hexstr [elm]
   (format "%02x" elm))
 
+(defn int->octstr [elm]
+  (format "%o" elm))
+
 (defn bytes->int [data]
   (reduce (fn [acc elm] (+ (bit-shift-left acc 8) (bit-and elm 0xff))) 0 data))
 
@@ -154,6 +157,9 @@
 (defn blob-blob ^bytes [^bytes data]
   (concat-bytes (format "blob %s\0" (count data)) data))
 
+(defn blob-tree ^bytes [^bytes data]
+  (concat-bytes (format "tree %s\0" (count data)) data))
+
 (defn get-file-attrs [file]
   (let [f (fs/file file)
         ;; :creation-time
@@ -202,11 +208,9 @@
 (defn get-file-entry [attrs]
   (let [blob (-> attrs :filepath fs/read-all-bytes blob-blob)
         hash (-> blob digest/sha1)
-        dir-name (subs hash 0 2)
-        file-name (subs hash 2)
-        file-path (fs/file objects-dir dir-name file-name)]
-    (fs/create-dirs (fs/parent file-path))
-    (fs/write-bytes file-path (zlib-compress blob))
+        file-path (fs/file objects-dir (subs hash 0 2) (subs hash 2))]
+    (-> file-path fs/parent fs/create-dirs)
+    (->> blob zlib-compress (fs/write-bytes file-path))
     (merge
      (select-keys attrs [:dev :ino :mode :uid :gid :size :filepath])
      {:ctime-sec (-> attrs :ctime Instant/.getEpochSecond)
@@ -317,14 +321,12 @@
 
     (doseq [filepath (:args options)]
       (let [blob (blob-blob (fs/read-all-bytes filepath))
-            hash (digest/sha1 blob)]
+            hash (digest/sha1 blob)
+            file-path (fs/file objects-dir (subs hash 0 2) (subs hash 2))]
         (println hash)
         (when (:w options)
-          (let [dir-name (subs hash 0 2)
-                file-name (subs hash 2)
-                file-path (fs/file objects-dir dir-name file-name)]
-            (fs/create-dirs (fs/parent file-path))
-            (fs/write-bytes file-path (zlib-compress blob))))))))
+          (-> file-path fs/parent fs/create-dirs)
+          (->> blob zlib-compress (fs/write-bytes file-path)))))))
 
 (defn cmd-cat-file
   "Output the contents of git object"
@@ -398,6 +400,27 @@
           (fs/write-bytes
            (create-index (assoc index :entries (->> res (sort-by key) (map val)))))))))
 
+(defn cmd-write-tree
+  "Create tree object from the current index"
+  [& _args]
+  (let [index (-> (fs/file git-dir "index")
+                  fs/read-all-bytes
+                  parse-index
+                  :parsed)
+        blob (->> (:entries index)
+                  (map (juxt (comp int->octstr :mode)
+                             (constantly " ")
+                             :filepath
+                             (constantly "\0")
+                             (comp hexstr->bytes :object-id)))
+                  concat-bytes
+                  blob-tree)
+        hash (digest/sha1 blob)
+        file-path (fs/file objects-dir (subs hash 0 2) (subs hash 2))]
+    (println hash)
+    (-> file-path fs/parent fs/create-dirs)
+    (->> blob zlib-compress (fs/write-bytes file-path))))
+
 (defn cmd-init
   "Initialize git repository"
   [& _args]
@@ -423,6 +446,7 @@
               "cat-file" #'cmd-cat-file
               "parse-index" #'cmd-parse-index
               "update-index" #'cmd-update-index
+              "write-tree" #'cmd-write-tree
               "help" #'cmd-help})
 
 (defn -main [& args]
