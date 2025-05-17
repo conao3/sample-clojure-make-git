@@ -1,9 +1,12 @@
 (ns mgit.mgit
   (:require
    [babashka.fs :as fs]
+   [clj-commons.digest :as digest]
    [clojure.string :as str])
   (:import
-   [java.io ByteArrayOutputStream]
+   [java.io ByteArrayOutputStream DataOutputStream OutputStreamWriter]
+   [java.nio.file.attribute FileTime]
+   [java.time Instant]
    [java.util.zip Deflater Inflater])
   (:gen-class))
 
@@ -40,6 +43,10 @@
       (. inflater end)
       (. byte-stream toByteArray))))
 
+(def uint8 byte)
+(def uint16 short)
+(def uint32 int)
+
 (defn eprintln [& args]
   (binding [*out* *err*]
     (apply println args)))
@@ -55,6 +62,15 @@
 
 (defn bytes->hexstr [data]
   (->> data ((partial map (partial format "%02x"))) (apply str)))
+
+(defn hexstr->uint32 [data]
+  (Integer/parseUnsignedInt data 16))
+
+(defn hexstr->bytes [data]
+  (->> data
+       (partition 8)
+       ((partial map (partial apply str)))
+       ((partial map hexstr->uint32))))
 
 (defn bytes-parse [acc key parse-fn remaining-update-fn]
   (-> acc
@@ -101,6 +117,106 @@
         (and (not= d 0) find-null)
         {:bytes bytes :remaining remaining}))))
 
+(defn camel->kebab-keyword [s]
+  (-> s
+      name
+      (str/replace #"([a-z])([A-Z])" "$1-$2")
+      str/lower-case
+      keyword))
+
+(defn concat-bytes
+  "concat Number, String, bytes into one bytes"
+  ^bytes [& args]
+  (with-open [byte-stream (ByteArrayOutputStream.)
+              data-out (DataOutputStream. byte-stream)
+              writer (OutputStreamWriter. byte-stream "UTF-8")]
+    (doseq [arg args]
+      (cond
+        (instance? Byte arg) (.writeByte data-out (byte arg))
+        (instance? Short arg) (.writeShort data-out arg)
+        (instance? Integer arg) (.writeInt data-out arg)
+        (instance? Long arg) (.writeLong data-out arg)
+
+        (instance? String arg)
+        (do (.write writer ^String arg)
+            (.flush writer))
+
+        (instance? (Class/forName "[B") arg)
+        (.write byte-stream ^bytes arg)
+
+        (seqable? arg)
+        (.write byte-stream ^bytes (apply concat-bytes arg))
+
+        :else
+        (throw (IllegalArgumentException.
+                (str "Unsupported type: " (class arg))))))
+
+    (.toByteArray byte-stream)))
+
+(defn blob-blob ^bytes [^bytes data]
+  (concat-bytes (format "blob %s\0" (count data)) data))
+
+(defn get-file-attrs [file]
+  (let [f (fs/file file)
+        ;; :creation-time
+        ;; :file-key
+        ;; :group
+        ;; :is-directory
+        ;; :is-other
+        ;; :is-regular-file
+        ;; :is-symbolic-link
+        ;; :last-access-time
+        ;; :last-modified-time
+        ;; :owner
+        ;; :permissions
+        ;; :size
+        posix-attrs (-> (fs/read-attributes f "posix:*")
+                        (update-keys camel->kebab-keyword))
+        ;; :creation-time
+        ;; :ctime
+        ;; :dev
+        ;; :file-key
+        ;; :gid
+        ;; :group
+        ;; :ino
+        ;; :is-directory
+        ;; :is-other
+        ;; :is-regular-file
+        ;; :is-symbolic-link
+        ;; :last-access-time
+        ;; :last-modified-time
+        ;; :mode
+        ;; :nlink
+        ;; :owner
+        ;; :permissions
+        ;; :rdev
+        ;; :size
+        ;; :uid
+        unix-attrs (-> (fs/read-attributes f "unix:*")
+                       (update-keys camel->kebab-keyword))
+        attrs (merge posix-attrs unix-attrs)]
+    (-> attrs
+        (assoc :filepath file) ; TODO: .gitからの相対パスにする
+        (assoc :ctime (-> attrs :creation-time FileTime/.toInstant))
+        (assoc :mtime (-> attrs :last-modified-time FileTime/.toInstant))
+        (assoc :atime (-> attrs :last-access-time FileTime/.toInstant)))))
+
+(defn get-file-entry [attrs]
+  (let [blob (-> attrs :filepath fs/read-all-bytes blob-blob)
+        hash (-> blob digest/sha1)
+        file-path (fs/file objects-dir (subs hash 0 2) (subs hash 2))]
+    (-> file-path fs/parent fs/create-dirs)
+    (->> blob zlib-compress (fs/write-bytes file-path))
+    (merge
+     (select-keys attrs [:dev :ino :mode :uid :gid :size :filepath])
+     {:ctime-sec (-> attrs :ctime Instant/.getEpochSecond)
+      :ctime-nsec (-> attrs :ctime Instant/.getNano)
+      :mtime-sec (-> attrs :mtime Instant/.getEpochSecond)
+      :mtime-nsec (-> attrs :mtime Instant/.getNano)
+      :object-id hash
+      ;; TODO: 実際にはassume-validなどを考慮する必要がある
+      :flag (-> attrs :filepath count (min 0xfff))})))
+
 (defn parse-index [^bytes data]
   (let [parse-filepath (fn [acc key]
                          (let [res (read-until-null acc)]
@@ -135,6 +251,33 @@
         (parse-uint32 :number-of-entries)
         (parse-entries :entries)
         (parse-bytes :checksum 20 bytes->hexstr))))
+
+(defn create-index ^bytes [args]
+  (let [blob (concat-bytes
+              "DIRC"
+              (uint32 (or (:version args) 2))
+              (uint32 (or (count (:entries args)) 0))
+              (->> (:entries args)
+                   (map (juxt (comp uint32 :ctime-sec)
+                              (comp uint32 :ctime-nsec)
+                              (comp uint32 :mtime-sec)
+                              (comp uint32 :mtime-nsec)
+                              (comp uint32 :dev)
+                              (comp uint32 :ino)
+                              (comp uint32 :mode)
+                              (comp uint32 :uid)
+                              (comp uint32 :gid)
+                              (comp uint32 :size)
+                              #(-> (:object-id %) hexstr->bytes)
+                              (comp uint16 :flag)
+                              #(-> % :filepath String/.getBytes)
+                              ;; 8Byte区切りまでnullで埋める。
+                              ;; これまでのエントリでファイルパスの開始時点がずれているため、調整する。
+                              #(-> (- 8 (mod (+ 6 (-> % :filepath String/.getBytes count)) 8))
+                                   (repeat (uint8 0)))))))]
+    (concat-bytes
+     blob
+     (-> (digest/sha1 blob) hexstr->bytes))))
 
 (defn parse [handler args]
   (reduce
@@ -172,15 +315,23 @@
 (defn cmd-add
   "Add file contents to the index"
   [& args]
-  (let [parsed (->> args
-                    (parse
-                     (fn [acc]
-                       (condp apply [(-> acc :remaining first)]
-                         #{"-N"} (-> acc
-                                     (assoc-in [:options :N] true)
-                                     (update :remaining next))
-                         nil))))]
-    (println parsed)))
+  (let [index-file (fs/file git-dir "index")
+        index (when (fs/exists? index-file)
+                (-> index-file
+                    fs/read-all-bytes
+                    parse-index
+                    :parsed))
+        filemap (->> (:entries index)
+                     (map (juxt :filepath identity))
+                     (into {}))
+        res (reduce
+             (fn [acc elm]
+               (assoc acc elm (-> elm get-file-attrs get-file-entry)))
+             filemap
+             (rest args))]
+    (-> (fs/file git-dir "index")
+        (fs/write-bytes
+         (create-index (assoc index :entries (->> res (sort-by key) (map val))))))))
 
 (defn cmd-ls-files
   "Show information about files in the index and the working tree"
