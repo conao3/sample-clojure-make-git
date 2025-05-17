@@ -8,18 +8,21 @@
 (def objects-dir (fs/file git-dir "objects"))
 (def refs-dir (fs/file git-dir "refs"))
 
+(defn eprintln [& args]
+  (binding [*out* *err*]
+    (apply println args)))
+
 (defn cmd-init
   "Initialize git repository"
   [& _args]
   (doseq [dir [git-dir objects-dir refs-dir]]
-    (fs/create-dirs dir))
+    (-> dir fs/create-dirs))
 
-  (doseq [[path contents] {"config" "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n"
-                           "HEAD" "ref: refs/heads/master\n"}]
-    (->> contents
-         (spit (fs/file git-dir path))))
+  (->> "ref: refs/heads/master\n"
+       (spit (fs/file git-dir "HEAD")))
 
-  (println (format "Initialized empty Git repository in %s" (fs/absolutize git-dir))))
+  (-> (format "Initialized empty Git repository in %s" (-> git-dir fs/absolutize))
+      eprintln))
 
 (defn cmd-help
   "Help"
