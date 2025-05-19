@@ -2,11 +2,13 @@
   (:require
    [babashka.fs :as fs]
    [clj-commons.digest :as digest]
+   [clojure.java.shell :as shell]
    [clojure.string :as str])
   (:import
    [java.io ByteArrayOutputStream DataOutputStream OutputStreamWriter]
    [java.nio.file.attribute FileTime]
-   [java.time Instant]
+   [java.time Instant ZonedDateTime]
+   [java.time.format DateTimeFormatter]
    [java.util.zip Deflater Inflater])
   (:gen-class))
 
@@ -155,6 +157,12 @@
 
 (defn blob-blob ^bytes [^bytes data]
   (concat-bytes (format "blob %s\0" (count data)) data))
+
+(defn blob-tree ^bytes [^bytes data]
+  (concat-bytes (format "tree %s\0" (count data)) data))
+
+(defn blob-commit ^bytes [^bytes data]
+  (concat-bytes (format "commit %s\0" (count data)) data))
 
 (defn get-file-attrs [file]
   (let [f (fs/file file)
@@ -333,6 +341,75 @@
         (fs/write-bytes
          (create-index (assoc index :entries (->> res (sort-by key) (map val))))))))
 
+(defn cmd-commit
+  "Record changes to the repository"
+  [& args]
+  (let [{:keys [options error]}
+        (->> (rest args)
+             (parse
+              (fn [acc]
+                (condp apply [(-> acc :remaining first)]
+                  #{"-m"} (-> acc
+                              (assoc-in [:options :m] (-> acc :remaining next first))
+                              (update :remaining (apply comp (repeat 2 next))))
+                  nil))))
+        _ (when error
+            (throw (ex-info error {:args args})))
+        _ (when-not (:m options)
+            (throw (ex-info "fatal: -m is required" {:args args})))
+        index-file (fs/file git-dir "index")
+        index (when (fs/exists? index-file)
+                (-> index-file
+                    fs/read-all-bytes
+                    parse-index
+                    :parsed))
+        tree-blob (->> (:entries index)
+                       (map (juxt (comp int->octstr :mode)
+                                  (constantly " ")
+                                  :filepath
+                                  (constantly "\0")
+                                  (comp hexstr->bytes :object-id)))
+                       concat-bytes
+                       blob-tree)
+        tree-hash (-> tree-blob digest/sha1)
+        tree-file (fs/file objects-dir (subs tree-hash 0 2) (subs tree-hash 2))
+
+        now ^ZonedDateTime (ZonedDateTime/now)
+        git-user (-> (shell/sh "git" "config" "user.name") :out str/trim)
+        git-email (-> (shell/sh "git" "config" "user.email") :out str/trim)
+        _ (shutdown-agents) ; shell/sh uses agents
+        git-info (format "%s <%s> %d %s"
+                         git-user
+                         git-email
+                         (. now toEpochSecond)
+                         (. (DateTimeFormatter/ofPattern "Z") format now))
+        commit-blob (->> [(format "tree %s" tree-hash)
+                          (format "author %s" git-info)
+                          (format "committer %s" git-info)
+                          ""
+                          (:m options)
+                          ""]
+                         (str/join "\n")
+                         blob-commit)
+        commit-hash (-> commit-blob digest/sha1)
+        commit-file (fs/file objects-dir (subs commit-hash 0 2) (subs commit-hash 2))
+        ref-file (->> (fs/file git-dir "HEAD")
+                      fs/read-all-lines
+                      (str/join "\n")
+                      (re-find #"ref: (.+)")
+                      second)]
+    (-> tree-file fs/parent fs/create-dirs)
+    (->> tree-blob zlib-compress (fs/write-bytes tree-file))
+    (-> (format "tree: %s" tree-hash) eprintln)
+
+    (-> commit-file fs/parent fs/create-dirs)
+    (->> commit-blob zlib-compress (fs/write-bytes commit-file))
+    (-> (format "commit: %s" commit-hash) eprintln)
+
+    (-> ref-file fs/parent fs/create-dirs)
+    (->> commit-hash vector (fs/write-lines (fs/file git-dir ref-file)))
+    (-> (format "update: %s -> %s" ref-file commit-hash) eprintln)))
+
 (defn cmd-ls-files
   "Show information about files in the index and the working tree"
   [& args]
@@ -376,6 +453,7 @@
 
 (def actions {"init" #'cmd-init
               "add" #'cmd-add
+              "commit" #'cmd-commit
               "ls-files" #'cmd-ls-files
               "help" #'cmd-help})
 
