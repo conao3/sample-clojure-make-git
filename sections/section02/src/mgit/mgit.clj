@@ -373,6 +373,14 @@
                        blob-tree)
         tree-hash (-> tree-blob digest/sha1)
         tree-file (fs/file objects-dir (subs tree-hash 0 2) (subs tree-hash 2))
+        ref-file (->> (fs/file git-dir "HEAD")
+                      fs/read-all-lines
+                      (str/join "\n")
+                      (re-find #"ref: (.+)")
+                      second
+                      (fs/file git-dir))
+        parent-hash (when (fs/exists? ref-file)
+                      (->> ref-file fs/read-all-lines (str/join "\n") str/trim))
 
         now ^ZonedDateTime (ZonedDateTime/now)
         git-user (-> (shell/sh "git" "config" "user.name") :out str/trim)
@@ -384,6 +392,8 @@
                          (. now toEpochSecond)
                          (. (DateTimeFormatter/ofPattern "Z") format now))
         commit-blob (->> [(format "tree %s" tree-hash)
+                          (when parent-hash
+                            (format "parent %s" parent-hash))
                           (format "author %s" git-info)
                           (format "committer %s" git-info)
                           ""
@@ -392,13 +402,7 @@
                          (str/join "\n")
                          blob-commit)
         commit-hash (-> commit-blob digest/sha1)
-        commit-file (fs/file objects-dir (subs commit-hash 0 2) (subs commit-hash 2))
-        ref-file (->> (fs/file git-dir "HEAD")
-                      fs/read-all-lines
-                      (str/join "\n")
-                      (re-find #"ref: (.+)")
-                      second
-                      (fs/file git-dir))]
+        commit-file (fs/file objects-dir (subs commit-hash 0 2) (subs commit-hash 2))]
     (-> tree-file fs/parent fs/create-dirs)
     (->> tree-blob zlib-compress (fs/write-bytes tree-file))
     (-> (format "tree: %s" tree-hash) eprintln)
