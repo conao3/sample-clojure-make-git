@@ -407,7 +407,7 @@
     (-> (format "commit: %s" commit-hash) eprintln)
 
     (-> ref-file fs/parent fs/create-dirs)
-    (->> commit-hash vector (fs/write-lines (fs/file git-dir ref-file)))
+    (->> commit-hash vector (fs/write-lines ref-file))
     (-> (format "update: %s -> %s" ref-file commit-hash) eprintln)))
 
 (defn cmd-ls-files
