@@ -397,7 +397,8 @@
                       fs/read-all-lines
                       (str/join "\n")
                       (re-find #"ref: (.+)")
-                      second)]
+                      second
+                      (fs/file git-dir))]
     (-> tree-file fs/parent fs/create-dirs)
     (->> tree-blob zlib-compress (fs/write-bytes tree-file))
     (-> (format "tree: %s" tree-hash) eprintln)
